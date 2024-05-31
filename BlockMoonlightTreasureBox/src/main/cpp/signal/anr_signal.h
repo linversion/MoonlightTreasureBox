@@ -20,7 +20,9 @@ extern "C" {
 int block_anr_signal_trace_register(void (*handler)(int, siginfo_t *, void *));
 void block_anr_signal_trace_unregister(void);
 void xc_trace_send_sigquit();
-
+void native_init_signal_anr_detective(JNIEnv *env,  jstring anrTracePath, jstring printTracePath);
+void hook_anr_trace_write(bool isSigUser);
+void unhook_anr_trace_write();
 #ifdef __cplusplus
 }
 #endif

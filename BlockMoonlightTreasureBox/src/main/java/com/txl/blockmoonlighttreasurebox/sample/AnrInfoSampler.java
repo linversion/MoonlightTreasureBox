@@ -33,7 +33,6 @@ public class AnrInfoSampler extends AbsSampler{
         int times = 50;
         do {
             List<ActivityManager.ProcessErrorStateInfo> processErrorStateInfoList = activityManager.getProcessesInErrorState();
-            Log.d(TAG, "doSample: list is null");
             if (processErrorStateInfoList != null) {
                 for (ActivityManager.ProcessErrorStateInfo info : processErrorStateInfoList) {
                     Log.d(TAG, "doSample: process info-" + info.processName + "-" + info.condition);

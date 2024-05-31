@@ -20,7 +20,11 @@
 #include <android/log.h>
 #include "xcc_util.h"
 #include "anr_signal.h"
-
+#include "bytehook.h"
+#include <sstream>
+#include <fstream>
+#include <sys/socket.h>
+#include <sys/system_properties.h>
 #define XC_TRACE_CALLBACK_METHOD_NAME         "traceCallback"
 #define XC_TRACE_CALLBACK_METHOD_SIGNATURE    "(Ljava/lang/String;Ljava/lang/String;)V"
 
@@ -28,6 +32,10 @@
 #define XC_TRACE_SIGNAL_CATCHER_TID_UNKNOWN   (-1)
 #define XC_TRACE_SIGNAL_CATCHER_THREAD_NAME   "Signal Catcher"
 #define XC_TRACE_SIGNAL_CATCHER_THREAD_SIGBLK 0x1000
+#define PROP_VALUE_MAX                      92
+#define PROP_SDK_NAME                       "ro.build.version.sdk"
+#define HOOK_CONNECT_PATH                    "/dev/socket/tombstoned_java_trace"
+#define HOOK_OPEN_PATH                       "/data/anr/traces.txt"
 
 static int                              xc_trace_is_lollipop = 0;
 static pid_t                            xc_trace_signal_catcher_tid = XC_TRACE_SIGNAL_CATCHER_TID_UNLOAD;
@@ -35,6 +43,19 @@ static pid_t                            xc_trace_signal_catcher_tid = XC_TRACE_S
 static sigset_t         xcc_signal_trace_oldset;
 static struct sigaction xcc_signal_trace_oldact;
 //static pid_t         xc_common_process_id;
+static bool isHooking = false;
+static bool isTraceWrite = false;
+static int signalCatcherTid;
+static bool fromMyPrintTrace = false;
+static std::string anrTracePathString;
+static std::string printTracePathString;
+static const char *TAG = "AnrMonitor";
+bytehook_stub_t open_stub;
+bytehook_stub_t connect_stub;
+bytehook_stub_t write_stub;
+//bytehook_hooked_t open_hooked;
+//bytehook_hooked_t connect_hooked;
+//bytehook_hooked_t write_hooked;
 
 
 static void xc_trace_load_signal_catcher_tid()
@@ -49,8 +70,8 @@ static void xc_trace_load_signal_catcher_tid()
     xc_trace_signal_catcher_tid = XC_TRACE_SIGNAL_CATCHER_TID_UNKNOWN;
 
     snprintf(buf, sizeof(buf), "/proc/%d/task", xc_common_process_id);
-    if(NULL == (dir = opendir(buf))) return;
-    while(NULL != (ent = readdir(dir)))
+    if(nullptr == (dir = opendir(buf))) return;
+    while(nullptr != (ent = readdir(dir)))
     {
         //get and check thread id
         if(0 != xcc_util_atoi(ent->d_name, &tid)) continue;
@@ -63,7 +84,7 @@ static void xc_trace_load_signal_catcher_tid()
         //check signal block masks
         sigblk = 0;
         snprintf(buf, sizeof(buf), "/proc/%d/status", tid);
-        if(NULL == (f = fopen(buf, "r"))) break;
+        if(nullptr == (f = fopen(buf, "r"))) break;
         while(fgets(buf, sizeof(buf), f))
         {
             if(1 == sscanf(buf, "SigBlk: %" SCNx64, &sigblk)) break;
@@ -76,6 +97,14 @@ static void xc_trace_load_signal_catcher_tid()
         break;
     }
     closedir(dir);
+}
+
+int getApiLevel() {
+    char buf[PROP_VALUE_MAX];
+    int len = __system_property_get(PROP_SDK_NAME, buf);
+    if (len <= 0)
+        return 0;
+    return atoi(buf);
 }
 
 void xc_trace_send_sigquit()
@@ -106,19 +135,184 @@ int block_anr_signal_trace_register(void (*handler)(int, siginfo_t *, void *)){
     act.sa_flags = SA_RESTART | SA_SIGINFO;
     if(0 != sigaction(SIGQUIT, &act, &xcc_signal_trace_oldact))
     {
-        pthread_sigmask(SIG_SETMASK, &xcc_signal_trace_oldset, NULL);
+        pthread_sigmask(SIG_SETMASK, &xcc_signal_trace_oldset, nullptr);
         return -1;
 //        return XCC_ERRNO_SYS;
     }
-
+    int level = getApiLevel();
+    __android_log_print(ANDROID_LOG_INFO, TAG, "API level: %d", level);
     return 0;
 }
 
 void block_anr_signal_trace_unregister(void){
-    pthread_sigmask(SIG_SETMASK, &xcc_signal_trace_oldset, NULL);
-    sigaction(SIGQUIT, &xcc_signal_trace_oldact, NULL);
+    pthread_sigmask(SIG_SETMASK, &xcc_signal_trace_oldset, nullptr);
+    sigaction(SIGQUIT, &xcc_signal_trace_oldact, nullptr);
 }
 
+
+
+void unhook_anr_trace_write() {
+    isHooking = false;
+    if (nullptr != connect_stub) {
+        bytehook_unhook(connect_stub);
+        connect_stub = nullptr;
+    }
+    if (nullptr != open_stub) {
+        bytehook_unhook(open_stub);
+        open_stub = nullptr;
+    }
+    if (nullptr != write_stub) {
+        bytehook_unhook(write_stub);
+        write_stub = nullptr;
+    }
+}
+
+/**
+ * 写入到文件
+ * @param content
+ * @param filePath
+ */
+void write_anr(const std::string& content, const std::string &filePath) {
+    __android_log_print(ANDROID_LOG_DEBUG, TAG, "write_anr path: %s", filePath.c_str());
+    // unhook write
+    unhook_anr_trace_write();
+    std::string to;
+    std::ofstream outfile;
+    outfile.open(filePath);
+    outfile << content;
+}
+
+
+/**
+ * connect 函数代理
+ * @param __fd 文件描述符
+ * @param __addr  一个用于表示网络套接字地址的结构体 <sys/socket.h>
+ * @param __addr_length
+ * @return
+ */
+int my_connect(int __fd, const struct sockaddr* __addr, socklen_t __addr_length) {
+    // 执行 stack清理（C++中的写法），不可省略
+    BYTEHOOK_STACK_SCOPE();
+    if (__addr != nullptr) {
+        __android_log_print(ANDROID_LOG_DEBUG, TAG, "my_connect path: %s", __addr->sa_data);
+        if (strcmp(__addr->sa_data, HOOK_CONNECT_PATH) == 0) {
+            // 保存线程 id
+            signalCatcherTid = gettid();
+            isTraceWrite = true;
+        }
+    }
+    // 调用原函数并返回结果
+    int res = BYTEHOOK_CALL_PREV(my_connect, __fd, __addr, __addr_length);
+    return res;
+}
+
+/**
+ * open 函数代理
+ * @param pathname 文件路径
+ * @param flags
+ * @param mode
+ * @return
+ */
+int my_open(const char *pathname, int flags, mode_t mode) {
+    BYTEHOOK_STACK_SCOPE();
+    if (pathname != nullptr) {
+        __android_log_print(ANDROID_LOG_DEBUG, TAG, "my_open pathname: %s",  pathname);
+        if (strcmp(pathname, HOOK_OPEN_PATH) == 0) {
+            signalCatcherTid = gettid();
+            isTraceWrite = true;
+        }
+    }
+    return BYTEHOOK_CALL_PREV(my_open, pathname, flags, mode);
+}
+
+/**
+ * write 函数代理
+ * @param fd
+ * @param buf
+ * @param count
+ * @return
+ */
+static ssize_t my_write(int fd, const void* const buf, size_t count) {
+    BYTEHOOK_STACK_SCOPE();
+    if (isTraceWrite && gettid() == signalCatcherTid) {
+        // 确认正在写入trace.txt
+        isTraceWrite = false;
+        if (buf != nullptr) {
+            std::string targetFilePath;
+            if (fromMyPrintTrace) {
+                targetFilePath = printTracePathString;
+            } else {
+                targetFilePath = anrTracePathString;
+            }
+            if (!targetFilePath.empty()) {
+                char *content = (char *) buf;
+                // 写入到文件
+                write_anr(content, targetFilePath);
+                if (!fromMyPrintTrace) {
+//                    anrDumpTraceCallback();
+                } else {
+//                    printTraceCallback();
+                }
+                fromMyPrintTrace = false;
+            }
+        }
+    }
+    return BYTEHOOK_CALL_PREV(my_write, fd, buf, count);
+}
+
+/**
+ * hook系统对data/anr/trace.txt的写入
+ */
+void hook_anr_trace_write(bool isSigUser) {
+    __android_log_print(ANDROID_LOG_DEBUG, TAG, "hook_anr_trace_write anrTracePathString: %s", anrTracePathString.c_str());
+    if (anrTracePathString.empty() || printTracePathString.empty()) {
+        return;
+    }
+
+    int apiLevel = getApiLevel();
+    __android_log_print(ANDROID_LOG_DEBUG, TAG, "hook_anr_trace_write apiLevel: %d", apiLevel);
+    if (apiLevel < 19) {
+        return;
+    }
+    if (isHooking) {
+        return;
+    }
+    isHooking = true;
+
+    if (apiLevel >= 27) {
+        // hook connect
+        connect_stub = bytehook_hook_single("libcutils.so", nullptr, "connect", (void *) my_connect, nullptr, nullptr);
+    } else {
+        // hook open
+        open_stub = bytehook_hook_single( "libart.so", nullptr, "open", (void *) my_open, nullptr, nullptr);
+    }
+    // //返回NULL表示添加任务失败，否则为成功。
+    //bytehook_stub_t bytehook_hook_single(
+    //    const char *caller_path_name, //调用者的pathname或basename（不可为NULL）
+    //    const char *callee_path_name, //被调用者的pathname
+    //    const char *sym_name, //需要hook的函数名（不可为NULL）
+    //    void *new_func, //新函数（不可为NULL）
+    //    bytehook_hooked_t hooked, //hook后的回调函数
+    //    void *hooked_arg); //回调函数的自定义参数
+    if (apiLevel >= 30 || apiLevel == 25 || apiLevel == 24) {
+        write_stub = bytehook_hook_single("libc.so", nullptr, "write", (void *) my_write, nullptr, nullptr);
+    } else if (apiLevel == 29) {
+        write_stub = bytehook_hook_single("libbase.so", nullptr, "write", (void *) my_write, nullptr, nullptr);
+    } else {
+        write_stub = bytehook_hook_single("libart.so", nullptr, "write", (void *) my_write, nullptr, nullptr);
+    }
+    __android_log_print(ANDROID_LOG_DEBUG, TAG, "hook_anr_trace_write connect_stub: %p write_stub: %p", connect_stub, write_stub);
+}
+
+void native_init_signal_anr_detective(JNIEnv *env, jstring anrTracePath, jstring printTracePath) {
+
+    if (anrTracePath != nullptr) {
+        anrTracePathString = env->GetStringUTFChars(anrTracePath, nullptr);
+    }
+    if (printTracePath != nullptr) {
+        printTracePathString = env->GetStringUTFChars(printTracePath, nullptr);
+    }
+}
 
 
 

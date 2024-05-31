@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.4.1)
 
+find_package(bytehook REQUIRED CONFIG)
+
 add_library( # Sets the name of the library.
              block_signal
 
@@ -28,4 +30,6 @@ target_link_libraries( # Specifies the target library.
 
                        # Links the target library to the log library
                        # included in the NDK.
-                       ${log-lib} )
+                       ${log-lib}
+                       bytehook::bytehook
+        )

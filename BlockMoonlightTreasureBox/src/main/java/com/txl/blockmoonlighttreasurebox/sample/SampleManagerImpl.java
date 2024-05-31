@@ -48,13 +48,13 @@ public class SampleManagerImpl implements ISamplerManager {
         }));
         anrSample.add(stackSample);
 
-        AbsSampler anrInfoSampler = new AnrInfoSampler();
-        anrInfoSampler.setSampleListener((msgId, msg) -> {
-                samplerListenerChain.onSystemLoadSample(baseTime, msgId, msg);
-            Log.d(TAG, "anr info sample end " + latch.getCount());
-            latch.countDown();
-        });
-        anrSample.add(anrInfoSampler);
+//        AbsSampler anrInfoSampler = new AnrInfoSampler();
+//        anrInfoSampler.setSampleListener((msgId, msg) -> {
+//                samplerListenerChain.onSystemLoadSample(baseTime, msgId, msg);
+//            Log.d(TAG, "anr info sample end " + latch.getCount());
+//            latch.countDown();
+//        });
+//        anrSample.add(anrInfoSampler);
     }
 
     @Override

@@ -34,9 +34,12 @@ public class TestApplication extends Application {
                             .useAnalyze(true)
                             .build())
                     .startMonitor();
-            SystemAnrMonitor.init(BlockMonitorFace.getBlockMonitorFace());
+            SystemAnrMonitor.init(
+                    BlockMonitorFace.getBlockMonitorFace(),
+                    getExternalCacheDir().getAbsolutePath() + "/trace/anr_trace",
+                    getExternalCacheDir().getAbsolutePath() + "/trace/print_trace"
+            );
         }
-
 
 //        BlockCanary.install(TestApplication.this, new BlockCanaryContext()).start();
     }

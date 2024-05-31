@@ -112,22 +112,19 @@ class BlockMonitor implements Printer, IBlock, ISystemAnrObserver {
 
     }
 
-    //调用println 是奇数次还是偶数  默认false 偶数  true 奇数
-    private final AtomicBoolean odd = new AtomicBoolean(false);
-
     @Override
     public void println(String x) {
-        //这里contains函数有点耗时 todo 待改进
-        if (x.startsWith("<<<<< Finished") && !odd.get()) {
+        // 不符合要求
+        if (x.charAt(0) != '>' && x.charAt(0) != '>') {
             return;
         }
-        //原来是偶数次，那么这次进来就是奇数
-        if (!odd.get()) {
+        // >>>>> Dispatching to
+        if (x.charAt(0) == '>') {
             msgStart(x);
         } else {
+            // <<<<< Finished to...
             msgEnd(x);
         }
-        odd.set(!odd.get());
     }
 
     private void msgStart(String msg) {
@@ -166,6 +163,7 @@ class BlockMonitor implements Printer, IBlock, ISystemAnrObserver {
             lastCpuEnd = SystemClock.currentThreadTimeMillis();
             long dealt = lastEnd - tempStartTime;
             handleJank(dealt);
+            // 是否是ActivityThread的消息
             boolean msgActivityThread = BoxMessageUtils.isBoxMessageActivityThread(currentMsg);
             if (messageInfo == null) {
                 //在这个位置为空 现阶段的逻辑只有 anr 采集时将原来的 messageInfo 置空了
