@@ -7,6 +7,8 @@ import android.os.SystemClock;
 import android.util.Log;
 import android.util.Printer;
 import android.view.Choreographer;
+import android.view.Display;
+import android.hardware.display.DisplayManager;
 
 import com.txl.blockmoonlighttreasurebox.info.BoxMessage;
 import com.txl.blockmoonlighttreasurebox.info.MessageInfo;
@@ -29,7 +31,7 @@ class BlockMonitor implements Printer, IBlock, ISystemAnrObserver {
     /**
      * 每一帧的时间
      */
-    private final float mFrameIntervalNanos = ReflectUtils.reflectLongField(Choreographer.getInstance(), Choreographer.class, "mFrameIntervalNanos", 16000000) * 0.000001f;
+    private float frameIntervalMillis = 16f;
     private final long noInit = -1;
     /**
      * tempStartTime 消息开始调度的时间
@@ -93,9 +95,25 @@ class BlockMonitor implements Printer, IBlock, ISystemAnrObserver {
             mainHandler.post(checkThreadRunnable);
     }
 
+    private float resolveFrameIntervalMillis(Context ctx) {
+        try {
+            android.hardware.display.DisplayManager dm = (android.hardware.display.DisplayManager) ctx.getSystemService(Context.DISPLAY_SERVICE);
+            android.view.Display display = dm != null ? dm.getDisplay(android.view.Display.DEFAULT_DISPLAY) : null;
+            if (display != null) {
+                float rate = display.getRefreshRate();
+                if (rate > 0f) {
+                    return 1000f / rate;
+                }
+            }
+        } catch (Throwable t) {
+        }
+        return 16f;
+    }
+
     public void init(Context applicationContext) {
         this.applicationContext = applicationContext;
         samplerManager = SamplerFactory.createSampleManager();
+        frameIntervalMillis = resolveFrameIntervalMillis(applicationContext);
         updateConfig(new BlockBoxConfig.Builder().build());
     }
 
@@ -209,7 +227,7 @@ class BlockMonitor implements Printer, IBlock, ISystemAnrObserver {
     }
 
     private void handleJank(long dealt) {
-        if (BoxMessageUtils.isBoxMessageDoFrame(currentMsg) && dealt > mFrameIntervalNanos * config.getJankFrame()) {
+        if (BoxMessageUtils.isBoxMessageDoFrame(currentMsg) && dealt > frameIntervalMillis * config.getJankFrame()) {
             MessageInfo temp = messageInfo;
             messageInfo = new MessageInfo();
             messageInfo.msgType = MessageInfo.MSG_TYPE_JANK;

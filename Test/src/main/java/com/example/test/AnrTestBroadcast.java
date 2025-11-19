@@ -1,9 +1,12 @@
 package com.example.test;
 
+import static android.content.Context.RECEIVER_NOT_EXPORTED;
+
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.os.Build;
 import android.util.Log;
 
 public class AnrTestBroadcast extends BroadcastReceiver {
@@ -26,7 +29,11 @@ public class AnrTestBroadcast extends BroadcastReceiver {
         IntentFilter intentFilter = new IntentFilter();
         intentFilter.addAction(ACTION_TEST_ANR);
         AnrTestBroadcast anrTestBroadcast = new AnrTestBroadcast();
-        context.registerReceiver(anrTestBroadcast,intentFilter);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.registerReceiver(anrTestBroadcast,intentFilter, RECEIVER_NOT_EXPORTED);
+        } else {
+            context.registerReceiver(anrTestBroadcast,intentFilter);
+        }
         return anrTestBroadcast;
     }
 }

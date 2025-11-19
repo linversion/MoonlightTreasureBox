@@ -125,16 +125,22 @@ int block_anr_signal_trace_register(void (*handler)(int, siginfo_t *, void *)){
     xc_common_process_id = getpid();
     //un-block the SIGQUIT mask for current thread, hope this is the main thread
     sigemptyset(&set);
+    // 添加SIGQUIT信号到这个信号集
     sigaddset(&set, SIGQUIT);
+    // 即解除对 SIGQUIT 信号的阻塞，函数返回值 r 不为 0 表示出错。
     if(0 != (r = pthread_sigmask(SIG_UNBLOCK, &set, &xcc_signal_trace_oldset))) return r;
 
     //register new signal handler for SIGQUIT
     memset(&act, 0, sizeof(act));
     sigfillset(&act.sa_mask);
+    // 赋值信号处理器
     act.sa_sigaction = handler;
+    // 表示使用信号处理函数时自动重启系统调用，并提供信号附加信息。
     act.sa_flags = SA_RESTART | SA_SIGINFO;
+    // 注册信号处理器，函数返回值不为 0 表示出错。
     if(0 != sigaction(SIGQUIT, &act, &xcc_signal_trace_oldact))
     {
+        // 如果注册失败，将恢复之前的信号屏蔽字，并返回错误码 -1。
         pthread_sigmask(SIG_SETMASK, &xcc_signal_trace_oldset, nullptr);
         return -1;
 //        return XCC_ERRNO_SYS;
